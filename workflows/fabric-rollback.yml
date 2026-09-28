@@ -1,0 +1,65 @@
+# Roll a stage back to the state before a given deployment run.
+# Actions → fabric-rollback → Run workflow → paste the run ID of the deployment to undo.
+# (Run ID = the number in the run's URL: .../actions/runs/<run_id>)
+name: fabric-rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:         { type: string,  required: true,  description: "Run ID of the fabric-deploy run to undo" }
+      stage:          { type: choice,  options: [ PROD, STAGE ], default: PROD }
+      config:         { type: string,  default: deploysettings.json }
+      delete_created: { type: boolean, default: false, description: "Also delete items that run newly created" }
+      dry_run:        { type: boolean, default: true,  description: "Show what would change, change nothing" }
+
+permissions:
+  contents: read
+  actions: read          # to download artifacts from another run
+
+concurrency:
+  group: fabric-deploy-${{ inputs.config }}
+  cancel-in-progress: false
+
+env:
+  FABRIC_TENANT_ID: ${{ secrets.FABRIC_TENANT_ID }}
+  FABRIC_CLIENT_ID: ${{ secrets.FABRIC_CLIENT_ID }}
+  FABRIC_CLIENT_SECRET: ${{ secrets.FABRIC_CLIENT_SECRET }}
+
+jobs:
+  rollback:
+    name: Roll back ${{ inputs.stage }} (run ${{ inputs.run_id }})${{ inputs.dry_run && ' – dry run' || '' }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.stage == 'PROD' && 'fabric-prod' || 'fabric-stage' }}   # same approvers as deploy
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: 8.0.x }
+      - run: dotnet publish src/Fabric.Deployment.Cli -c Release -o cli
+
+      - name: Download the rollback point from run ${{ inputs.run_id }}
+        uses: actions/download-artifact@v4
+        with:
+          name: report-${{ inputs.stage }}
+          path: snapshot-source
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Roll back
+        working-directory: cli
+        run: |
+          SNAP=$(find ../snapshot-source -name snapshot.json | head -1)
+          if [ -z "$SNAP" ]; then echo "::error::No snapshot.json in run ${{ inputs.run_id }} (snapshots disabled, or the run never reached the deploy step)"; exit 1; fi
+          echo "Using $SNAP"
+          ARGS=(--yes)
+          [ "${{ inputs.delete_created }}" = "true" ] && ARGS+=(--delete-created)
+          [ "${{ inputs.dry_run }}" = "true" ] && ARGS+=(--dry-run)
+          dotnet fabric-deploy.dll rollback --config "${{ inputs.config }}" --snapshot "$SNAP" "${ARGS[@]}"
+
+      - name: Health check after rollback
+        if: ${{ !inputs.dry_run }}
+        working-directory: cli
+        run: dotnet fabric-deploy.dll health --config "${{ inputs.config }}"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: "rollback-${{ inputs.stage }}", path: cli/deployment-output, retention-days: 90 }

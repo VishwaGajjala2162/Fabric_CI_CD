@@ -1,0 +1,61 @@
+# Git → CI build/test → DEV→STAGE → plan PROD → approval → PROD
+# Setup: docs/SETUP.md · Every deployment: docs/DEPLOY.md
+name: fabric-deploy
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      config:        { type: string,  default: deploysettings.json, description: "Settings file" }
+      include_names: { type: string,  default: "", description: "Only these items (wildcards, comma separated). Empty = all" }
+      include_types: { type: string,  default: "", description: "Only these item types (comma separated). Empty = all" }
+      deploy_prod:   { type: boolean, default: true, description: "Continue to PROD after STAGE" }
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fabric-deploy-${{ inputs.config || 'deploysettings.json' }}   # one deployment per pipeline at a time
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: CI Build / Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: 8.0.x }
+      - run: dotnet build -c Release
+      - run: dotnet test -c Release --no-build
+      - run: dotnet publish src/Fabric.Deployment.Cli -c Release -o cli
+      - uses: actions/upload-artifact@v4
+        with: { name: cli, path: cli }
+
+  stage:
+    needs: build
+    uses: ./.github/workflows/_fabric-stage.yml
+    secrets: inherit
+    with:
+      config: ${{ inputs.config || 'deploysettings.json' }}
+      source: DEV
+      target: STAGE
+      environment: fabric-stage
+      git_sync: ${{ vars.FABRIC_GIT_SYNC == 'true' }}
+      include_names: ${{ inputs.include_names || '' }}
+      include_types: ${{ inputs.include_types || '' }}
+
+  prod:
+    needs: stage
+    if: github.event_name == 'push' || inputs.deploy_prod
+    uses: ./.github/workflows/_fabric-stage.yml
+    secrets: inherit
+    with:
+      config: ${{ inputs.config || 'deploysettings.json' }}
+      source: STAGE
+      target: PROD
+      environment: fabric-prod
+      plan_first: true
+      include_names: ${{ inputs.include_names || '' }}
+      include_types: ${{ inputs.include_types || '' }}

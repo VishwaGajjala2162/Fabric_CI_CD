@@ -1,0 +1,84 @@
+# Reusable: deploy one stage (optionally plan → approve → deploy).
+# Called by fabric-deploy.yml — and by any new solution's workflow (see docs/REUSE.md).
+name: _fabric-stage
+
+on:
+  workflow_call:
+    inputs:
+      config:        { type: string,  default: deploysettings.json, description: "Settings file (in src/Fabric.Deployment.Cli)" }
+      source:        { type: string,  required: true }
+      target:        { type: string,  required: true }
+      environment:   { type: string,  required: true, description: "GitHub environment (put required reviewers on PROD)" }
+      plan_first:    { type: boolean, default: false, description: "Publish plan.json before the environment approval, deploy only that plan" }
+      git_sync:      { type: boolean, default: false, description: "Pull the latest Git commit into the source workspace first" }
+      include_names: { type: string,  default: "",    description: "Selective deploy, e.g. 'Sales*,Churn Notebook'" }
+      include_types: { type: string,  default: "",    description: "Selective deploy, e.g. 'Report,SemanticModel'" }
+
+env:
+  FABRIC_TENANT_ID: ${{ secrets.FABRIC_TENANT_ID }}
+  FABRIC_CLIENT_ID: ${{ secrets.FABRIC_CLIENT_ID }}
+  FABRIC_CLIENT_SECRET: ${{ secrets.FABRIC_CLIENT_SECRET }}
+  FABRIC_DEPLOY_WEBHOOK_URL: ${{ secrets.FABRIC_DEPLOY_WEBHOOK_URL }}
+
+jobs:
+  plan:
+    name: Plan ${{ inputs.source }} → ${{ inputs.target }}
+    if: inputs.plan_first
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: 8.0.x }
+      - uses: actions/download-artifact@v4
+        with: { name: cli, path: cli }
+      - name: Plan (reviewers read this summary before approving)
+        working-directory: cli
+        run: |
+          ARGS=()
+          [ -n "${{ inputs.include_names }}" ] && ARGS+=(--include-names "${{ inputs.include_names }}")
+          [ -n "${{ inputs.include_types }}" ] && ARGS+=(--include-types "${{ inputs.include_types }}")
+          dotnet fabric-deploy.dll plan --config "${{ inputs.config }}" --source "${{ inputs.source }}" --target "${{ inputs.target }}" "${ARGS[@]}"
+      - uses: actions/upload-artifact@v4
+        with: { name: "plan-${{ inputs.target }}", path: cli/deployment-output/plan.json }
+
+  deploy:
+    name: Deploy ${{ inputs.source }} → ${{ inputs.target }}
+    needs: plan
+    if: always() && (needs.plan.result == 'success' || needs.plan.result == 'skipped')
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}      # ← approval gate (required reviewers)
+    steps:
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: 8.0.x }
+      - uses: actions/download-artifact@v4
+        with: { name: cli, path: cli }
+      - uses: actions/download-artifact@v4
+        if: inputs.plan_first
+        with: { name: "plan-${{ inputs.target }}", path: approved }
+
+      - name: Bootstrap pipeline / workspaces / capacities (idempotent)
+        working-directory: cli
+        run: dotnet fabric-deploy.dll bootstrap --config "${{ inputs.config }}"
+
+      - name: Sync ${{ inputs.source }} from Git
+        if: inputs.git_sync
+        working-directory: cli
+        run: dotnet fabric-deploy.dll git-sync --config "${{ inputs.config }}" --stage "${{ inputs.source }}"
+
+      - name: Deploy (backup → deploy → monitor → validate → auto-rollback on failure)
+        working-directory: cli
+        env:
+          FABRIC_DEPLOY_APPROVER: ${{ github.actor }}
+        run: |
+          ARGS=(--note "GitHub run ${{ github.run_number }} (${{ github.sha }})")
+          [ -n "${{ inputs.include_names }}" ] && ARGS+=(--include-names "${{ inputs.include_names }}")
+          [ -n "${{ inputs.include_types }}" ] && ARGS+=(--include-types "${{ inputs.include_types }}")
+          if [ "${{ inputs.plan_first }}" = "true" ]; then ARGS+=(--approved-plan ../approved/plan.json); else ARGS+=(--auto-approve); fi
+          dotnet fabric-deploy.dll deploy --config "${{ inputs.config }}" --source "${{ inputs.source }}" --target "${{ inputs.target }}" "${ARGS[@]}"
+
+      # Report + audit + ROLLBACK POINT (snapshot). Keep it: fabric-rollback.yml restores from it.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: "report-${{ inputs.target }}"
+          path: cli/deployment-output
+          retention-days: 90

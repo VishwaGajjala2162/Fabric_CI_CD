@@ -1,0 +1,57 @@
+# Scheduled monitoring: pipeline health + recent deployments, alert on problems.
+name: fabric-monitor
+
+on:
+  schedule:
+    - cron: "17 11 * * 1-5"      # weekdays 11:17 UTC — change to suit
+  workflow_dispatch:
+    inputs:
+      config: { type: string, default: deploysettings.json }
+
+permissions:
+  contents: read
+
+env:
+  FABRIC_TENANT_ID: ${{ secrets.FABRIC_TENANT_ID }}
+  FABRIC_CLIENT_ID: ${{ secrets.FABRIC_CLIENT_ID }}
+  FABRIC_CLIENT_SECRET: ${{ secrets.FABRIC_CLIENT_SECRET }}
+  CONFIG: ${{ inputs.config || 'deploysettings.json' }}
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: 8.0.x }
+      - run: dotnet publish src/Fabric.Deployment.Cli -c Release -o cli
+
+      - name: Recent deployments
+        working-directory: cli
+        run: |
+          echo '## Recent Fabric deployments' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          dotnet fabric-deploy.dll history --config "$CONFIG" --top 15 | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Health check (capacity, last deployment, stuck runs, drift)
+        working-directory: cli
+        run: dotnet fabric-deploy.dll health --config "$CONFIG"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: health, path: cli/deployment-output, retention-days: 30 }
+
+      - name: Alert
+        if: failure()
+        env:
+          HOOK: ${{ secrets.FABRIC_DEPLOY_WEBHOOK_URL }}
+        run: |
+          [ -z "$HOOK" ] && exit 0
+          URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          curl -sS -X POST -H 'Content-Type: application/json' "$HOOK" -d @- <<JSON
+          {"type":"message","text":"❌ Fabric pipeline health check failed: $URL",
+           "attachments":[{"contentType":"application/vnd.microsoft.card.adaptive","content":{"type":"AdaptiveCard","version":"1.4",
+           "body":[{"type":"TextBlock","weight":"Bolder","color":"Attention","text":"❌ Fabric pipeline health check failed"},
+                   {"type":"TextBlock","wrap":true,"text":"$URL"}]}}]}
+          JSON
