@@ -1,0 +1,69 @@
+{
+  // Fabric connection. Secrets come from environment variables, never from this file.
+  "fabric": {
+    "baseUrl": "https://api.fabric.microsoft.com/v1",
+    "auth": {
+      "mode": "ClientSecret",                   // ClientSecret | EnvironmentToken
+      "tenantId": "<tenant-guid>",              // or env FABRIC_TENANT_ID
+      "clientId": "<app-registration-guid>",    // or env FABRIC_CLIENT_ID
+      "clientSecretEnvVar": "FABRIC_CLIENT_SECRET",
+      "tokenEnvVar": "FABRIC_ACCESS_TOKEN"      // used when mode = EnvironmentToken
+    }
+  },
+
+  // One deployment pipeline, one workspace per stage, each on its own capacity.
+  "pipeline": {
+    "displayName": "Sales Analytics",
+    "description": "Sales analytics solution – DEV → STAGE → PROD",
+    "stages": [
+      { "name": "DEV",   "workspaceName": "Sales-DEV",   "capacityId": "<dev-capacity-guid>",   "requiresApproval": false },
+      { "name": "STAGE", "workspaceName": "Sales-STAGE", "capacityId": "<test-capacity-guid>",  "requiresApproval": false },
+      { "name": "PROD",  "workspaceName": "Sales-PROD",  "capacityId": "<prod-capacity-guid>",  "requiresApproval": true, "isPublic": true }
+    ]
+  },
+
+  // Defaults for a run; --source / --target / --note override on the command line.
+  "deployment": {
+    "sourceStage": "DEV",
+    "targetStage": "STAGE",
+    "note": "Automated deployment",
+    "items": {
+      "includeTypes": [],                        // e.g. ["Lakehouse","Notebook","SemanticModel","Report"]
+      "excludeTypes": [],
+      "includeNames": [],                        // wildcards allowed: "Sales*"
+      "excludeNames": [ "Scratch*", "*_tmp" ]
+    },
+    "allowCrossRegionDeployment": false,
+    "maxItemsPerRequest": 300,
+    "failIfNothingToDeploy": false,
+    "waitForRunningDeployments": true,
+    "dryRun": false
+  },
+
+  "approval": {
+    "mode": "Interactive",                       // Auto | Interactive | PlanFile
+    "approvedPlanPath": null                     // or --approved-plan <file>
+  },
+
+  // Rollback point: target item definitions are backed up before every deployment.
+  "rollback": {
+    "snapshotBeforeDeploy": true,
+    "failIfSnapshotIncomplete": false,         // true = refuse to deploy if any item can't be backed up
+    "autoRollbackOnFailure": true,             // restore automatically if deploy/validation fails
+    "deleteCreatedItems": false,               // on rollback, also delete items the failed run created
+    "restoreCapacity": true,                   // on rollback, move workspace back if the run moved it
+    "skipItemTypes": [ "Dashboard", "Datamart", "Warehouse", "SQLEndpoint" ],
+    "definitionTimeoutMinutes": 10
+  },
+
+  "monitor": { "pollIntervalSeconds": 10, "timeoutMinutes": 60 },
+
+  // Teams (Workflows incoming webhook) or Slack. URL comes from the env var / GitHub secret.
+  "notifications": {
+    "webhookUrlEnvVar": "FABRIC_DEPLOY_WEBHOOK_URL",
+    "format": "Teams",                         // Teams | Slack
+    "when": "Always"                           // Always | OnFailure | Never
+  },
+
+  "output": { "directory": "./deployment-output", "auditFile": "deployment-history.jsonl" }
+}

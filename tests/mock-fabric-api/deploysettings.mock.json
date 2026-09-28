@@ -1,0 +1,87 @@
+{
+  "fabric": {
+    "baseUrl": "https://api.fabric.microsoft.com/v1",
+    "auth": {
+      "mode": "EnvironmentToken",
+      "tenantId": "<tenant-guid>",
+      "clientId": "<app-registration-guid>",
+      "clientSecretEnvVar": "FABRIC_CLIENT_SECRET",
+      "tokenEnvVar": "FABRIC_ACCESS_TOKEN"
+    }
+  },
+  "pipeline": {
+    "displayName": "Sales Analytics",
+    "description": "Sales analytics solution \u2013 DEV \u2192 STAGE \u2192 PROD",
+    "stages": [
+      {
+        "name": "DEV",
+        "workspaceName": "Sales-DEV",
+        "capacityId": "11111111-0000-0000-0000-000000000001",
+        "requiresApproval": false
+      },
+      {
+        "name": "STAGE",
+        "workspaceName": "Sales-STAGE",
+        "capacityId": "11111111-0000-0000-0000-000000000002",
+        "requiresApproval": false
+      },
+      {
+        "name": "PROD",
+        "workspaceName": "Sales-PROD",
+        "capacityId": "11111111-0000-0000-0000-000000000002",
+        "requiresApproval": true,
+        "isPublic": true
+      }
+    ]
+  },
+  "deployment": {
+    "sourceStage": "DEV",
+    "targetStage": "STAGE",
+    "note": "Automated deployment",
+    "items": {
+      "includeTypes": [],
+      "excludeTypes": [],
+      "includeNames": [],
+      "excludeNames": [
+        "Scratch*",
+        "*_tmp"
+      ]
+    },
+    "allowCrossRegionDeployment": false,
+    "maxItemsPerRequest": 300,
+    "failIfNothingToDeploy": false,
+    "waitForRunningDeployments": true,
+    "dryRun": false
+  },
+  "approval": {
+    "mode": "Interactive",
+    "approvedPlanPath": null
+  },
+  "rollback": {
+    "snapshotBeforeDeploy": true,
+    "failIfSnapshotIncomplete": false,
+    "autoRollbackOnFailure": true,
+    "deleteCreatedItems": false,
+    "restoreCapacity": true,
+    "skipItemTypes": [
+      "Dashboard",
+      "Datamart",
+      "Warehouse",
+      "SQLEndpoint"
+    ],
+    "definitionTimeoutMinutes": 10
+  },
+  "monitor": {
+    "pollIntervalSeconds": 1,
+    "timeoutMinutes": 60
+  },
+  "notifications": {
+    "webhookUrlEnvVar": "FABRIC_DEPLOY_WEBHOOK_URL",
+    "format": "Teams",
+    "when": "Always"
+  },
+  "output": {
+    "directory": "./mock-output",
+    "auditFile": "deployment-history.jsonl"
+  }
+}

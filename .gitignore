@@ -1,0 +1,6 @@
+bin/
+obj/
+deployment-output/
+mock-output/
+*.user
+.vs/
